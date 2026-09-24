@@ -21,5 +21,5 @@ export default defineConfig({
     proxy: { '/api': { target: apiTarget, changeOrigin: true } },
   },
   build: { target: 'es2022', assetsInlineLimit: 0 },
-  test: { environment: 'node', include: ['src/**/*.test.ts'] },
+  test: { environment: 'node', include: ['src/**/*.test.{ts,tsx}'] },
 })

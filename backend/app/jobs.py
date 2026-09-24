@@ -23,6 +23,7 @@ from .errors import CapacityExceeded, SpotifyNotConfigured, TrackError, UserFaci
 from .files import build_zip, safe_join, track_filename, unique_name, zip_name_for
 from .matcher import build_search_query, pick_best
 from .models import JobStatus, Playlist, PlaylistEntry, TrackInfo, TrackResult, TrackState
+from .safe_harbor import CleanCatalog, CleanStatus, select_clean_source
 from .spotify import extract_playlist_id
 
 log = logging.getLogger(__name__)
@@ -55,6 +56,7 @@ class Job:
     id: str
     playlist_id: str
     created_at: datetime = field(default_factory=_now)
+    safe_harbor: bool = False  # prefer clean versions; skip tracks without a verified clean match
     status: JobStatus = JobStatus.QUEUED
     phase: str = "queued"
     playlist_title: str | None = None
@@ -81,6 +83,12 @@ class Job:
             failed = sum(1 for r in self.results if r.state is TrackState.FAILED)
             skipped = sum(1 for r in self.results if r.state is TrackState.SKIPPED)
             processed = ok + failed + skipped
+            clean_unavailable = sum(1 for r in self.results if r.clean_status == CleanStatus.UNAVAILABLE)
+            clean_summary: dict[str, int] = {}
+            if self.safe_harbor:
+                for r in self.results:
+                    if r.clean_status:
+                        clean_summary[r.clean_status] = clean_summary.get(r.clean_status, 0) + 1
             total = self.total_tracks
             if self.status.is_downloadable:
                 progress = 100.0
@@ -95,18 +103,26 @@ class Job:
                 "job_id": self.id,
                 "status": self.status.value,
                 "phase": self.phase,
+                "safe_harbor": self.safe_harbor,
                 "playlist_title": self.playlist_title,
                 "total_tracks": total,
                 "processed_tracks": processed,
                 "completed_tracks": ok,
                 "failed_tracks": failed,
                 "skipped_tracks": skipped,
+                "clean_unavailable_tracks": clean_unavailable,
+                "clean_summary": clean_summary,
                 "current_track": current,
                 "progress": progress,
                 "error": self.error,
                 "notice": self.notice,
                 "failures": [
-                    {"position": r.position, "track": r.label, "reason": r.reason or "failed"}
+                    {
+                        "position": r.position,
+                        "track": r.label,
+                        "reason": r.reason or "failed",
+                        "clean_status": r.clean_status,
+                    }
                     for r in self.results
                     if r.state in (TrackState.FAILED, TrackState.SKIPPED)
                 ][:200],
@@ -119,10 +135,18 @@ class Job:
 
 
 class JobManager:
-    def __init__(self, settings: Settings, spotify: PlaylistSource, engine: Engine) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        spotify: PlaylistSource,
+        engine: Engine,
+        catalog: CleanCatalog | None = None,
+    ) -> None:
         self.settings = settings
         self.spotify = spotify
         self.engine = engine
+        # Spotify catalog search for Safe Harbor (None without API credentials).
+        self.catalog = catalog
         self.data_dir = settings.data_dir.resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self._jobs: dict[str, Job] = {}
@@ -154,7 +178,7 @@ class JobManager:
 
     # -- public API -------------------------------------------------------------
 
-    def create(self, url: str) -> Job:
+    def create(self, url: str, *, safe_harbor: bool = False) -> Job:
         playlist_id = extract_playlist_id(url)
         if self.settings.credentials_required and not self.settings.spotify_configured:
             raise SpotifyNotConfigured(
@@ -163,15 +187,15 @@ class JobManager:
         with self._lock:
             active = [j for j in self._jobs.values() if j.status.is_active]
             for existing in active:
-                if existing.playlist_id == playlist_id:
+                if existing.playlist_id == playlist_id and existing.safe_harbor == safe_harbor:
                     log.info("reusing active job %s for playlist %s", existing.id, playlist_id)
                     return existing
             limit = self.settings.max_concurrent_jobs + self.settings.max_queued_jobs
             if len(active) >= limit:
                 raise CapacityExceeded("the server is busy with other playlists. try again in a few minutes.")
-            job = Job(id=uuid.uuid4().hex, playlist_id=playlist_id)
+            job = Job(id=uuid.uuid4().hex, playlist_id=playlist_id, safe_harbor=safe_harbor)
             self._jobs[job.id] = job
-        log.info("job %s created for playlist %s", job.id, playlist_id)
+        log.info("job %s created for playlist %s safe_harbor=%s", job.id, playlist_id, safe_harbor)
         self._executor.submit(self._run, job)
         return job
 
@@ -275,8 +299,9 @@ class JobManager:
     ) -> None:
         track = entry.track
         assert track is not None and result.filename is not None
+        failed_status = CleanStatus.FAILED if job.safe_harbor else None
         if job.cancel.is_set() or time.monotonic() >= job_deadline:
-            self._set_result(job, result, TrackState.FAILED, "job time limit reached before this track")
+            self._set_result(job, result, TrackState.FAILED, "job time limit reached before this track", failed_status)
             return
 
         with job.lock:
@@ -285,37 +310,56 @@ class JobManager:
         deadline = min(time.monotonic() + self.settings.track_timeout_seconds, job_deadline)
         try:
             work.mkdir(parents=True, exist_ok=True)
-            query = build_search_query(track)
-            candidates = self.engine.search(query)
-            best, why = pick_best(track, candidates)
-            if best is None:
-                raise TrackError(why)
+            clean_status: CleanStatus | None = None
+            if job.safe_harbor:
+                decision = select_clean_source(
+                    track, self.engine.search, self.catalog, context=f"job={job.id[:8]} pos={entry.position}"
+                )
+                if decision.candidate is None:
+                    # Never fall back to a possibly explicit version: skip and report.
+                    self._set_result(job, result, TrackState.FAILED, decision.reason, decision.status)
+                    return
+                best, clean_status = decision.candidate, decision.status
+            else:
+                query = build_search_query(track)
+                candidates = self.engine.search(query)
+                picked, why = pick_best(track, candidates)
+                if picked is None:
+                    raise TrackError(why)
+                best = picked
+                log.debug("job %s #%d %r -> %s (%s)", job.id, entry.position, query, best.url, why)
             if time.monotonic() >= deadline:
                 raise TrackError("track timed out")
-            log.debug("job %s #%d %r -> %s (%s)", job.id, entry.position, query, best.url, why)
             source = self.engine.download_audio(best.url, work, deadline=deadline, cancel=job.cancel)
             dest = safe_join(mp3_dir, result.filename)
             self.engine.convert_to_mp3(
                 source, dest, track, position=entry.position, total=total, timeout=deadline - time.monotonic()
             )
             result.source_url = best.url
-            self._set_result(job, result, TrackState.OK, None)
+            self._set_result(job, result, TrackState.OK, None, clean_status)
         except TrackError as exc:
             log.info("job %s #%d %s: %s", job.id, entry.position, entry.label, exc)
-            self._set_result(job, result, TrackState.FAILED, str(exc) or "failed")
+            self._set_result(job, result, TrackState.FAILED, str(exc) or "failed", failed_status)
         except Exception:
             log.exception("job %s #%d unexpected error", job.id, entry.position)
-            self._set_result(job, result, TrackState.FAILED, "unexpected error")
+            self._set_result(job, result, TrackState.FAILED, "unexpected error", failed_status)
         finally:
             with job.lock:
                 job.in_progress.pop(entry.position, None)
             shutil.rmtree(work, ignore_errors=True)
 
     @staticmethod
-    def _set_result(job: Job, result: TrackResult, state: TrackState, reason: str | None) -> None:
+    def _set_result(
+        job: Job,
+        result: TrackResult,
+        state: TrackState,
+        reason: str | None,
+        clean_status: CleanStatus | None = None,
+    ) -> None:
         with job.lock:
             result.state = state
             result.reason = reason
+            result.clean_status = clean_status.value if clean_status else None
 
     def _package(
         self, job: Job, playlist: Playlist, plan: list[tuple[PlaylistEntry, TrackResult]], job_dir: Path
@@ -332,14 +376,18 @@ class JobManager:
                 else:
                     self._set_result(job, result, TrackState.FAILED, "converted file missing")
         if not files:
+            if job.safe_harbor:
+                raise UserFacingError(
+                    "safe harbor could not find a verified clean version of any track in this playlist."
+                )
             raise UserFacingError(
                 "none of the tracks could be matched or downloaded. the audio source may be unavailable."
             )
         failed = [r for r in job.results if r.state is not TrackState.OK]
         extra: dict[str, str] = {}
-        if failed or playlist.notice:
-            extra[FAILED_LIST_NAME] = _failed_report(playlist, job.results)
-        zip_name = zip_name_for(playlist.name)
+        if failed or playlist.notice or job.safe_harbor:
+            extra[FAILED_LIST_NAME] = _failed_report(playlist, job.results, safe_harbor=job.safe_harbor)
+        zip_name = zip_name_for(playlist.name, clean=job.safe_harbor)
         zip_path = safe_join(job_dir, zip_name)
         build_zip(zip_path, files, extra)
         with job.lock:
@@ -385,7 +433,7 @@ class JobManager:
         return len(removed)
 
 
-def _failed_report(playlist: Playlist, results: list[TrackResult]) -> str:
+def _failed_report(playlist: Playlist, results: list[TrackResult], *, safe_harbor: bool = False) -> str:
     lines = [
         f"playlist: {playlist.name}",
         f"spotify: https://open.spotify.com/playlist/{playlist.playlist_id}",
@@ -398,6 +446,16 @@ def _failed_report(playlist: Playlist, results: list[TrackResult]) -> str:
     for r in results:
         if r.state is not TrackState.OK:
             lines.append(f"{r.position:03d}  {r.label}  --  {r.reason or 'failed'}")
+    if safe_harbor:
+        lines += [
+            "",
+            "safe harbor: clean-version status of every track",
+            "(best effort, from spotify's explicit flag and source labels; audio is not analysed)",
+            "",
+        ]
+        for r in results:
+            status = CleanStatus(r.clean_status).label if r.clean_status else (r.reason or "not processed")
+            lines.append(f"{r.position:03d}  {r.label}  --  {status}")
     lines += [
         "",
         "spotify supplies metadata only. audio was located by search and matching may be imperfect.",

@@ -106,6 +106,11 @@ def core_title(title: str) -> str:
     return t.strip() or title
 
 
+def duration_tolerance(seconds: float) -> float:
+    """Allowed duration difference (s) for a full score; candidates beyond twice this are rejected."""
+    return max(15.0, seconds * 0.12)
+
+
 def build_search_query(track: TrackInfo, include_album: bool | None = None) -> str:
     """``Artist - Title`` plus the album when the title alone is too generic."""
     title = core_title(track.title)
@@ -159,7 +164,7 @@ def score_candidate(track: TrackInfo, cand: Candidate) -> Scored:
 
     if track.duration_ms > 0 and cand.duration is not None:
         spotify_s = track.duration_ms / 1000
-        tolerance = max(15.0, spotify_s * 0.12)
+        tolerance = duration_tolerance(spotify_s)
         diff = abs(cand.duration - spotify_s)
         if diff > tolerance * 2:
             return Scored(cand, 0.0, "duration differs too much")

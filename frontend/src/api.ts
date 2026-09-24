@@ -1,21 +1,35 @@
 export type JobStatus = 'queued' | 'processing' | 'complete' | 'partial' | 'failed'
 
+/** Safe Harbor outcome codes (backend: app/safe_harbor.py CleanStatus). */
+export type CleanStatus =
+  | 'original_clean'
+  | 'clean_matched'
+  | 'radio_edit_matched'
+  | 'clean_unavailable'
+  | 'low_confidence'
+  | 'download_failed'
+
 export interface TrackFailure {
   position: number
   track: string
   reason: string
+  clean_status: CleanStatus | null
 }
 
 export interface Job {
   job_id: string
   status: JobStatus
   phase: string
+  safe_harbor: boolean
   playlist_title: string | null
   total_tracks: number
   processed_tracks: number
   completed_tracks: number
   failed_tracks: number
   skipped_tracks: number
+  /** Tracks skipped because no verified clean version was found (Safe Harbor). */
+  clean_unavailable_tracks: number
+  clean_summary: Partial<Record<CleanStatus, number>>
   current_track: string | null
   progress: number
   error: string | null
@@ -34,6 +48,8 @@ export interface Health {
   /** 'embed' = keyless public player, 'api' = Spotify Web API with credentials. */
   metadata_source: 'embed' | 'api'
   credentials_required: boolean
+  /** Safe Harbor can confirm clean versions in Spotify's catalog (needs API credentials). */
+  safe_harbor_catalog: boolean
   ffmpeg_available: boolean
   limits: {
     max_playlist_tracks: number
@@ -74,13 +90,18 @@ function networkError(): ApiError {
   return new ApiError('could not reach the server. check your connection.', 0)
 }
 
-export async function createJob(url: string, signal?: AbortSignal): Promise<Job> {
+export interface CreateJobOptions {
+  safeHarbor?: boolean
+  signal?: AbortSignal
+}
+
+export async function createJob(url: string, { safeHarbor = false, signal }: CreateJobOptions = {}): Promise<Job> {
   let res: Response
   try {
     res = await fetch('/api/jobs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url }),
+      body: JSON.stringify({ url, safe_harbor: safeHarbor }),
       signal,
     })
   } catch (err) {

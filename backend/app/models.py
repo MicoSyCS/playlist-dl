@@ -50,6 +50,8 @@ class TrackInfo:
     artists: tuple[str, ...]
     album: str
     duration_ms: int
+    # Spotify's explicit flag; None when the source did not say (treated as explicit by Safe Harbor).
+    explicit: bool | None = None
 
     @property
     def primary_artist(self) -> str:
@@ -78,3 +80,4 @@ class TrackResult:
     reason: str | None = None
     filename: str | None = None
     source_url: str | None = None
+    clean_status: str | None = None  # Safe Harbor outcome code (see safe_harbor.CleanStatus)

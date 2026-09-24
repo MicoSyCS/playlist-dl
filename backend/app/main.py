@@ -17,13 +17,14 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import Settings, get_settings
 from .downloader import AudioEngine, resolve_ffmpeg
 from .errors import UserFacingError
 from .jobs import JobManager, PlaylistSource
+from .safe_harbor import CleanCatalog
 from .spotify import SpotifyClient
 from .spotify_embed import EMBED_TRACK_CAP, ApiWithEmbedFallback, SpotifyEmbedClient
 
@@ -32,6 +33,8 @@ log = logging.getLogger("app")
 
 class CreateJobRequest(BaseModel):
     url: str = Field(..., max_length=2048)
+    # Optional; omitted means off, so existing clients behave exactly as before.
+    safe_harbor: StrictBool = False
 
 
 def build_manager(settings: Settings) -> JobManager:
@@ -39,6 +42,7 @@ def build_manager(settings: Settings) -> JobManager:
     if ffmpeg is None:
         log.error("ffmpeg not found (FFMPEG_PATH=%r); every track will fail conversion", settings.ffmpeg_path)
     source: PlaylistSource
+    catalog: CleanCatalog | None = None  # Spotify catalog search for Safe Harbor
     embed = SpotifyEmbedClient()
     if not settings.uses_spotify_api:
         log.info("playlist metadata: spotify public embed player (no api credentials)")
@@ -47,6 +51,8 @@ def build_manager(settings: Settings) -> JobManager:
         if not settings.spotify_configured:
             log.warning("SPOTIFY_METADATA_SOURCE=api but credentials are not set; job creation will be refused")
         api = SpotifyClient(settings.spotify_client_id, settings.spotify_client_secret, market=settings.spotify_market)
+        if settings.spotify_configured:
+            catalog = api
         if settings.spotify_metadata_source == "auto":
             log.info("playlist metadata: spotify web api, falling back to the embed player")
             source = ApiWithEmbedFallback(api, embed)
@@ -60,7 +66,7 @@ def build_manager(settings: Settings) -> JobManager:
         max_download_mb=settings.max_download_mb,
         bitrate_kbps=settings.mp3_bitrate,
     )
-    return JobManager(settings, source, engine)
+    return JobManager(settings, source, engine, catalog)
 
 
 def create_app(settings: Settings | None = None, manager: JobManager | None = None) -> FastAPI:
@@ -95,7 +101,9 @@ def create_app(settings: Settings | None = None, manager: JobManager | None = No
         return JSONResponse({"error": exc.message}, status_code=exc.status_code)
 
     @app.exception_handler(RequestValidationError)
-    async def validation_handler(_: Request, __: RequestValidationError) -> JSONResponse:
+    async def validation_handler(_: Request, exc: RequestValidationError) -> JSONResponse:
+        if any("safe_harbor" in err.get("loc", ()) for err in exc.errors()):
+            return JSONResponse({"error": "safe_harbor must be true or false."}, status_code=422)
         return JSONResponse(
             {"error": 'invalid request. send json like {"url": "https://open.spotify.com/playlist/..."}.'},
             status_code=422,
@@ -122,6 +130,8 @@ def create_app(settings: Settings | None = None, manager: JobManager | None = No
             "spotify_configured": settings.spotify_configured,
             "metadata_source": "api" if settings.uses_spotify_api else "embed",
             "credentials_required": settings.credentials_required,
+            # Safe Harbor can confirm clean versions in Spotify's catalog only with API credentials.
+            "safe_harbor_catalog": settings.uses_spotify_api and settings.spotify_configured,
             "ffmpeg_available": resolve_ffmpeg(settings.ffmpeg_path) is not None,
             "limits": {
                 "max_playlist_tracks": settings.max_playlist_tracks
@@ -137,7 +147,7 @@ def create_app(settings: Settings | None = None, manager: JobManager | None = No
     @app.post("/api/jobs", status_code=202)
     def create_job(body: CreateJobRequest, request: Request) -> dict[str, Any]:
         m = mgr(request)
-        job = m.create(body.url)
+        job = m.create(body.url, safe_harbor=body.safe_harbor)
         return m.snapshot(job)
 
     @app.get("/api/jobs/{job_id}")

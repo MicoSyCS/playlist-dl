@@ -66,8 +66,13 @@ def unique_name(name: str, taken: set[str]) -> str:
     return candidate
 
 
-def zip_name_for(playlist_title: str) -> str:
-    return sanitize_filename(playlist_title, fallback="playlist", max_length=100) + ".zip"
+def zip_name_for(playlist_title: str, *, clean: bool = False) -> str:
+    """``Playlist.zip``, or ``Playlist (Clean).zip`` for Safe Harbor jobs.
+
+    The suffix is added after sanitising/truncating so it is never cut off.
+    """
+    base = sanitize_filename(playlist_title, fallback="playlist", max_length=100)
+    return f"{base} (Clean).zip" if clean else f"{base}.zip"
 
 
 def safe_join(base: Path, name: str) -> Path:

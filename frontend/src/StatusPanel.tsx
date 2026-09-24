@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { downloadUrl, isActive, type Job } from './api'
+import { downloadUrl, isActive, type Job, type TrackFailure } from './api'
 import { formatBytes, jobRef, pad, trackProgressLabel } from './format'
 import type { Connection } from './useJob'
 
@@ -51,6 +51,10 @@ export function StatusPanel({ jobId, job, connection, expirationHours, onReset }
   }, [active])
 
   const headingId = `job-${jobId}-title`
+  const failures = job?.failures ?? []
+  const cleanSkipped = failures.filter((f) => f.clean_status === 'clean_unavailable')
+  const otherFailures = failures.filter((f) => f.clean_status !== 'clean_unavailable')
+  const otherFailed = job ? job.failed_tracks - job.clean_unavailable_tracks : 0
 
   return (
     <section className={`panel is-${status}`} aria-labelledby={headingId}>
@@ -66,6 +70,7 @@ export function StatusPanel({ jobId, job, connection, expirationHours, onReset }
         <span className="meta">
           {active ? phase : 'job'} &middot; {jobRef(jobId)}
         </span>
+        {job?.safe_harbor && <span className="tag tag-outline">safe harbor enabled</span>}
         {connection === 'retrying' && <span className="meta warn">signal lost &middot; retrying</span>}
       </header>
 
@@ -110,6 +115,15 @@ export function StatusPanel({ jobId, job, connection, expirationHours, onReset }
         </p>
       )}
 
+      {job?.safe_harbor && total > 0 && (
+        <p className="specline clean-summary" aria-label="safe harbor results">
+          <b>orig clean</b> {pad(job.clean_summary.original_clean ?? 0, width)} &middot; <b>clean</b>{' '}
+          {pad(job.clean_summary.clean_matched ?? 0, width)} &middot; <b>radio edit</b>{' '}
+          {pad(job.clean_summary.radio_edit_matched ?? 0, width)} &middot; <b>no clean</b>{' '}
+          {pad(job.clean_unavailable_tracks, width)}
+        </p>
+      )}
+
       {status === 'failed' && job?.error && (
         <p className="panel-error" role="alert">
           {job.error}
@@ -134,28 +148,32 @@ export function StatusPanel({ jobId, job, connection, expirationHours, onReset }
         </p>
       )}
 
-      {status === 'partial' && (
+      {status === 'partial' && job && (
         <p className="note">
-          {job?.failed_tracks} {job?.failed_tracks === 1 ? 'track was' : 'tracks were'} not matched or failed. see
-          failed-tracks.txt inside the archive.
+          {job.clean_unavailable_tracks > 0 &&
+            `${job.clean_unavailable_tracks} skipped: no verified clean version. `}
+          {otherFailed > 0 && `${otherFailed} ${otherFailed === 1 ? 'track was' : 'tracks were'} not matched or failed. `}
+          see failed-tracks.txt inside the archive.
         </p>
       )}
 
-      {job && job.failures.length > 0 && !active && (
-        <details className="failures">
-          <summary>
-            {pad(job.failures.length, width)} not included <span aria-hidden="true">+</span>
-          </summary>
-          <ol>
-            {job.failures.map((f) => (
-              <li key={f.position}>
-                <span className="pos">{pad(f.position, width)}</span>
-                <span className="trk">{f.track}</span>
-                <span className="why">{f.reason}</span>
-              </li>
-            ))}
-          </ol>
-        </details>
+      {!active && cleanSkipped.length > 0 && (
+        <FailureList
+          className="failures clean-skipped"
+          title={`${pad(cleanSkipped.length, width)} no clean version found`}
+          items={cleanSkipped}
+          width={width}
+          open
+        />
+      )}
+
+      {!active && otherFailures.length > 0 && (
+        <FailureList
+          className="failures"
+          title={`${pad(otherFailures.length, width)} not included`}
+          items={otherFailures}
+          width={width}
+        />
       )}
 
       {!active && (
@@ -169,5 +187,32 @@ export function StatusPanel({ jobId, job, connection, expirationHours, onReset }
         </div>
       )}
     </section>
+  )
+}
+
+interface FailureListProps {
+  className: string
+  title: string
+  items: TrackFailure[]
+  width: number
+  open?: boolean
+}
+
+function FailureList({ className, title, items, width, open = false }: FailureListProps) {
+  return (
+    <details className={className} open={open}>
+      <summary>
+        {title} <span aria-hidden="true">+</span>
+      </summary>
+      <ol>
+        {items.map((f) => (
+          <li key={f.position}>
+            <span className="pos">{pad(f.position, width)}</span>
+            <span className="trk">{f.track}</span>
+            <span className="why">{f.reason}</span>
+          </li>
+        ))}
+      </ol>
+    </details>
   )
 }

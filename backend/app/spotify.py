@@ -123,8 +123,31 @@ def parse_entry(row: dict[str, Any], position: int) -> PlaylistEntry:
         artists=artists,
         album=album,
         duration_ms=int(obj.get("duration_ms") or 0),
+        explicit=obj["explicit"] if isinstance(obj.get("explicit"), bool) else None,
     )
     return PlaylistEntry(position, track, None, label)
+
+
+SEARCH_LIMIT = 10  # current Search API maximum per request
+
+
+def parse_search_tracks(data: dict[str, Any]) -> list[TrackInfo]:
+    """Track objects from a ``GET /search?type=track`` response (episodes/local files dropped)."""
+    tracks_obj = data.get("tracks")
+    items = tracks_obj.get("items") if isinstance(tracks_obj, dict) else None
+    out: list[TrackInfo] = []
+    for pos, obj in enumerate(items or [], start=1):
+        if not isinstance(obj, dict):
+            continue
+        entry = parse_entry({"track": obj}, pos)
+        if entry.track is not None:
+            out.append(entry.track)
+    return out
+
+
+def _search_term(text: str) -> str:
+    """Make free text safe inside a quoted Search API field filter."""
+    return " ".join(text.replace('"', " ").replace(":", " ").split())[:100]
 
 
 def parse_rows(rows: Iterable[Any], start_position: int) -> list[PlaylistEntry]:
@@ -291,6 +314,15 @@ class SpotifyClient:
 
         playlist.entries = playlist.entries[:max_tracks]
         return playlist
+
+    def search_tracks(self, artist: str, title: str) -> list[TrackInfo]:
+        """Catalog search used by Safe Harbor to find other (e.g. non-explicit) versions of a track."""
+        query = f'track:"{_search_term(title)}" artist:"{_search_term(artist)}"'
+        data = self._get(
+            f"{API_BASE}/search",
+            params={"q": query, "type": "track", "limit": SEARCH_LIMIT, "market": self._market},
+        )
+        return parse_search_tracks(data)
 
     def _fetch_rows_explicit(self, playlist_id: str, total: int) -> list[PlaylistEntry]:
         entries: list[PlaylistEntry] = []

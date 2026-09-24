@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
 import { ApiError, createJob, getHealth, isActive, type Health } from './api'
 import logo from './assets/7pairs-logo.png'
 import art from './assets/mahj.png'
+import { SafeHarborToggle } from './SafeHarborToggle'
 import { StatusPanel } from './StatusPanel'
 import { useJob } from './useJob'
 import { checkPlaylistUrl } from './validation'
@@ -12,6 +13,7 @@ export default function App() {
   const [url, setUrl] = useState('')
   const [form, setForm] = useState<FormState>({ kind: 'idle' })
   const [health, setHealth] = useState<Health | null>(null)
+  const [safeHarbor, setSafeHarbor] = useState(false)
   const { jobId, job, connection, lost, track, clear } = useJob()
   const inputRef = useRef<HTMLInputElement>(null)
   const inFlight = useRef(false)
@@ -40,7 +42,15 @@ export default function App() {
     inFlight.current = true
     setForm({ kind: 'submitting' })
     try {
-      const created = await createJob(check.url)
+      const created = await createJob(check.url, { safeHarbor })
+      if (safeHarbor && created.safe_harbor !== true) {
+        // An older backend ignores the flag and would deliver unfiltered (possibly explicit) tracks.
+        setForm({
+          kind: 'error',
+          message: "the server didn't confirm safe harbor, so this job may include explicit tracks. restart the backend and try again.",
+        })
+        return
+      }
       track(created)
       setForm({ kind: 'idle' })
     } catch (err) {
@@ -73,6 +83,8 @@ export default function App() {
         <h1 className="sr-only">7pairs playlist packager</h1>
 
         <form className="linkform" onSubmit={submit} noValidate aria-busy={busy}>
+          <SafeHarborToggle checked={safeHarbor} onChange={setSafeHarbor} disabled={busy} />
+
           <label htmlFor="playlist-url" className="sr-only">
             spotify playlist link
           </label>

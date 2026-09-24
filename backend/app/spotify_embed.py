@@ -113,6 +113,7 @@ def parse_embed_row(row: dict[str, Any], position: int) -> PlaylistEntry:
         artists=artists,
         album="",  # not present in the embed data
         duration_ms=int(duration) if isinstance(duration, (int, float)) and duration > 0 else 0,
+        explicit=row["isExplicit"] if isinstance(row.get("isExplicit"), bool) else None,
     )
     return PlaylistEntry(position, track, None, label)
 

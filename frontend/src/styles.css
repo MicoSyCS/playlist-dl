@@ -221,6 +221,136 @@ input {
   color: var(--yellow);
 }
 
+/* ------------------------------------------------------------------ safe harbor switch */
+
+.safe-harbor {
+  position: relative;
+  display: flex;
+  width: fit-content;
+  margin-bottom: 16px;
+}
+
+.switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  letter-spacing: 1px;
+  cursor: pointer;
+  user-select: none;
+}
+
+/* The real checkbox stays in the accessibility tree and tab order; the track is its visual. */
+.switch-input {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 34px;
+  height: 16px;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+
+.switch-track {
+  position: relative;
+  flex: none;
+  width: 34px;
+  height: 16px;
+  border: 1px solid var(--fg);
+  transition: background 0.08s linear;
+}
+
+.switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  background: var(--fg);
+  transition:
+    transform 0.08s linear,
+    background 0.08s linear;
+}
+
+.switch-input:checked + .switch-track {
+  background: var(--fg);
+}
+
+.switch-input:checked + .switch-track .switch-thumb {
+  transform: translateX(18px);
+  background: var(--bg);
+}
+
+.switch-input:focus-visible + .switch-track {
+  outline: 1px solid var(--fg);
+  outline-offset: 3px;
+}
+
+.switch:has(.switch-input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.switch-label {
+  color: var(--fg);
+}
+
+.switch-state {
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: var(--fg-faint);
+}
+
+.safe-harbor.is-on .switch-state {
+  color: var(--fg);
+}
+
+/* Help text as a tooltip: an inverted slab above the switch, on hover or keyboard focus.
+   Its ::after bridges the gap so the pointer can move onto the tooltip. */
+.switch-tip {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  z-index: 2;
+  width: max-content;
+  max-width: min(360px, calc(100vw - 32px));
+  padding: 6px 9px 5px;
+  margin-bottom: 8px;
+  font-size: 10px;
+  line-height: 1.6;
+  letter-spacing: 1px;
+  background: var(--fg);
+  color: var(--bg);
+  visibility: hidden;
+  opacity: 0;
+  transition:
+    opacity 0.08s linear,
+    visibility 0s linear 0.08s;
+}
+
+.switch-tip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 8px;
+}
+
+.safe-harbor:hover .switch-tip,
+.safe-harbor:has(.switch-input:focus-visible) .switch-tip {
+  visibility: visible;
+  opacity: 1;
+  transition: opacity 0.08s linear;
+}
+
+.safe-harbor.tip-dismissed .switch-tip {
+  visibility: hidden;
+  opacity: 0;
+}
+
 /* ------------------------------------------------------------------ tags + caret */
 
 .tag {
@@ -249,6 +379,12 @@ input {
 }
 .tag-red {
   background: var(--red);
+  color: var(--fg);
+}
+.tag-outline {
+  padding: 2px 6px 1px;
+  border: 1px solid var(--fg);
+  background: transparent;
   color: var(--fg);
 }
 
@@ -454,6 +590,10 @@ input {
   padding-top: 10px;
 }
 
+.failures.clean-skipped {
+  border-top-color: var(--fg-dim);
+}
+
 .failures summary {
   display: flex;
   justify-content: space-between;
@@ -644,7 +784,10 @@ input {
   .meter-fill,
   .go,
   .dl,
-  .btn {
+  .btn,
+  .switch-track,
+  .switch-thumb,
+  .switch-tip {
     transition: none;
   }
 }

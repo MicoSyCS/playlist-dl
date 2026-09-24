@@ -60,6 +60,13 @@ def test_zip_name_for() -> None:
     assert zip_name_for("..") == "playlist.zip"
 
 
+def test_zip_name_clean_suffix_survives_truncation() -> None:
+    assert zip_name_for("Road Trip / 2024", clean=True) == "Road Trip 2024 (Clean).zip"
+    assert zip_name_for("..", clean=True) == "playlist (Clean).zip"
+    long = zip_name_for("x" * 300, clean=True)
+    assert long.endswith(" (Clean).zip") and len(long) <= 100 + len(" (Clean).zip")
+
+
 def test_safe_join_blocks_traversal(tmp_path: Path) -> None:
     assert safe_join(tmp_path, "ok.mp3") == (tmp_path / "ok.mp3").resolve()
     for bad in ["../x", "..", ".", "a/b", "a\\b", ""]:
