@@ -135,7 +135,7 @@ export default function App() {
             </p>
           )}
           <p id={hintId} className="specline hint">
-            make sure ur playlists are public!!! &middot; matching not guaranteed &middot; support your local dj
+            make sure ur playlists are public and i&rsquo;ll do the rest &middot; support your local dj
             {health?.credentials_required && !health.spotify_configured && (
               <>
                 {' '}
@@ -171,8 +171,8 @@ export default function App() {
 
       <footer className="notice">
         <p>
-          all the audio comes from third-party sources and not spotify so we&rsquo;re good there. all the metadata comes
-          from spotify when you paste your playlist, but i won&rsquo;t tell if you don&rsquo;t.
+          all the audio comes from third-party sources and not spotify so we&rsquo;re good there. the metadata comes from
+          spotify tho, but i won&rsquo;t tell if you don&rsquo;t.
         </p>
         <p className="stamp">
           format mp3 {limits?.mp3_bitrate ?? 192} kbps &middot; max {limits?.max_playlist_tracks ?? 100} tracks
