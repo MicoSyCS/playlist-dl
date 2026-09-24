@@ -172,8 +172,7 @@ export default function App() {
       <footer className="notice">
         <p>
           all the audio comes from third-party sources and not spotify so we&rsquo;re good there. all the metadata comes
-          from spotify when you paste your playlist, but i won&rsquo;t tell if you don&rsquo;t. no drm is circumvented and
-          nothing is taken from spotify&rsquo;s streams. private playlists are not supported.
+          from spotify when you paste your playlist, but i won&rsquo;t tell if you don&rsquo;t.
         </p>
         <p className="stamp">
           format mp3 {limits?.mp3_bitrate ?? 192} kbps &middot; max {limits?.max_playlist_tracks ?? 100} tracks
