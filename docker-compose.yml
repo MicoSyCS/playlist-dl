@@ -1,0 +1,26 @@
+services:
+  api:
+    build: ./backend
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATA_DIR: /data
+    volumes:
+      - downloads:/data
+    restart: unless-stopped
+    # The API is only reachable through the web container's /api proxy.
+    expose:
+      - "8000"
+
+  web:
+    build: ./frontend
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  downloads:

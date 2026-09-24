@@ -1,0 +1,16 @@
+.env
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+backend/data/
+data/
+.claude/
+*.tsbuildinfo
+CLAUDE.md
+# design source files (app uses its own copies in frontend/src/assets)
+/*.png
